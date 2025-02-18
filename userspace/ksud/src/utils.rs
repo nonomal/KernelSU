@@ -1,12 +1,15 @@
 use anyhow::{bail, Context, Error, Ok, Result};
 use std::{
     fs::{create_dir_all, remove_file, write, File, OpenOptions},
-    io::{ErrorKind::AlreadyExists, ErrorKind::NotFound, Write},
+    io::{
+        ErrorKind::{AlreadyExists, NotFound},
+        Write,
+    },
     path::Path,
+    process::Command,
 };
 
-use crate::{assets, defs, ksucalls, restorecon};
-use std::fs::metadata;
+use crate::{assets, boot_patch, defs, ksucalls, module, restorecon};
 #[allow(unused_imports)]
 use std::fs::{set_permissions, Permissions};
 #[cfg(unix)]
@@ -21,7 +24,7 @@ use std::path::PathBuf;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use rustix::{
     process,
-    thread::{move_into_link_name_space, unshare, LinkNameSpaceType, UnshareFlags},
+    thread::{move_into_link_name_space, LinkNameSpaceType},
 };
 
 pub fn ensure_clean_dir(dir: impl AsRef<Path>) -> Result<()> {
@@ -138,12 +141,6 @@ pub fn switch_mnt_ns(pid: i32) -> Result<()> {
     Ok(())
 }
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
-pub fn unshare_mnt_ns() -> Result<()> {
-    unshare(UnshareFlags::NEWNS)?;
-    Ok(())
-}
-
 fn switch_cgroup(grp: &str, pid: u32) {
     let path = Path::new(grp).join("cgroup.procs");
     if !path.exists() {
@@ -184,16 +181,6 @@ pub fn has_magisk() -> bool {
     which::which("magisk").is_ok()
 }
 
-pub fn get_tmp_path() -> &'static str {
-    if metadata(defs::TEMP_DIR_LEGACY).is_ok() {
-        return defs::TEMP_DIR_LEGACY;
-    }
-    if metadata(defs::TEMP_DIR).is_ok() {
-        return defs::TEMP_DIR;
-    }
-    ""
-}
-
 #[cfg(target_os = "android")]
 fn link_ksud_to_bin() -> Result<()> {
     let ksu_bin = PathBuf::from(defs::DAEMON_PATH);
@@ -204,7 +191,7 @@ fn link_ksud_to_bin() -> Result<()> {
     Ok(())
 }
 
-pub fn install() -> Result<()> {
+pub fn install(magiskboot: Option<PathBuf>) -> Result<()> {
     ensure_dir_exists(defs::ADB_DIR)?;
     std::fs::copy("/proc/self/exe", defs::DAEMON_PATH)?;
     restorecon::lsetfilecon(defs::DAEMON_PATH, restorecon::ADB_CON)?;
@@ -214,6 +201,35 @@ pub fn install() -> Result<()> {
     #[cfg(target_os = "android")]
     link_ksud_to_bin()?;
 
+    if let Some(magiskboot) = magiskboot {
+        ensure_dir_exists(defs::BINARY_DIR)?;
+        let _ = std::fs::copy(magiskboot, defs::MAGISKBOOT_PATH);
+    }
+
+    Ok(())
+}
+
+pub fn uninstall(magiskboot_path: Option<PathBuf>) -> Result<()> {
+    if Path::new(defs::MODULE_DIR).exists() {
+        println!("- Uninstall modules..");
+        module::uninstall_all_modules()?;
+        module::prune_modules()?;
+    }
+    println!("- Removing directories..");
+    std::fs::remove_dir_all(defs::WORKING_DIR).ok();
+    std::fs::remove_file(defs::DAEMON_PATH).ok();
+    crate::mount::umount_dir(defs::MODULE_DIR).ok();
+    std::fs::remove_dir_all(defs::MODULE_DIR).ok();
+    std::fs::remove_dir_all(defs::MODULE_UPDATE_TMP_DIR).ok();
+    println!("- Restore boot image..");
+    boot_patch::restore(None, magiskboot_path, true)?;
+    println!("- Uninstall KernelSU manager..");
+    Command::new("pm")
+        .args(["uninstall", "me.weishu.kernelsu"])
+        .spawn()?;
+    println!("- Rebooting in 5 seconds..");
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    Command::new("reboot").spawn()?;
     Ok(())
 }
 
@@ -236,7 +252,7 @@ pub fn copy_sparse_file<P: AsRef<Path>, Q: AsRef<Path>>(
     for segment in segments {
         if let SegmentType::Data = segment.segment_type {
             let start = segment.start;
-            let end = segment.end;
+            let end = segment.end + 1;
 
             src_file.seek(SeekFrom::Start(start))?;
             dst_file.seek(SeekFrom::Start(start))?;

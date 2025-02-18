@@ -2,16 +2,17 @@ package me.weishu.kernelsu.ui.component.profile
 
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ReadMore
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowDropUp
 import androidx.compose.material.icons.filled.Create
-import androidx.compose.material.icons.filled.ReadMore
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -54,7 +55,7 @@ fun TemplateConfig(
         ) {
             OutlinedTextField(
                 modifier = Modifier
-                    .menuAnchor()
+                    .menuAnchor(MenuAnchorType.PrimaryNotEditable)
                     .fillMaxWidth(),
                 readOnly = true,
                 label = { Text(stringResource(R.string.profile_template)) },
@@ -105,7 +106,7 @@ fun TemplateConfig(
                             IconButton(onClick = {
                                 onViewTemplate(tid)
                             }) {
-                                Icon(Icons.Filled.ReadMore, null)
+                                Icon(Icons.AutoMirrored.Filled.ReadMore, null)
                             }
                         }
                     )

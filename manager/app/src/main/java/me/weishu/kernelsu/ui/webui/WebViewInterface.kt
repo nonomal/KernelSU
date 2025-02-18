@@ -9,26 +9,28 @@ import android.view.Window
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.widget.Toast
-import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.topjohnwu.superuser.CallbackList
 import com.topjohnwu.superuser.ShellUtils
+import com.topjohnwu.superuser.internal.UiThreadHandler
 import me.weishu.kernelsu.ui.util.createRootShell
+import me.weishu.kernelsu.ui.util.listModules
+import me.weishu.kernelsu.ui.util.withNewRootShell
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.util.concurrent.CompletableFuture
 
-class WebViewInterface(val context: Context, private val webView: WebView) {
-
-    companion object {
-        var isHideSystemUI: Boolean = false
-    }
+class WebViewInterface(
+    val context: Context,
+    private val webView: WebView,
+    private val modDir: String
+) {
 
     @JavascriptInterface
     fun exec(cmd: String): String {
-        val shell = createRootShell(true)
-        return ShellUtils.fastCmd(shell, cmd)
+        return withNewRootShell(true) { ShellUtils.fastCmd(this, cmd) }
     }
 
     @JavascriptInterface
@@ -63,8 +65,9 @@ class WebViewInterface(val context: Context, private val webView: WebView) {
         processOptions(finalCommand, options)
         finalCommand.append(cmd)
 
-        val shell = createRootShell(true)
-        val result = shell.newJob().add(finalCommand.toString()).to(ArrayList(), ArrayList()).exec()
+        val result = withNewRootShell(true) {
+            newJob().add(finalCommand.toString()).to(ArrayList(), ArrayList()).exec()
+        }
         val stdout = result.out.joinToString(separator = "\n")
         val stderr = result.err.joinToString(separator = "\n")
 
@@ -111,13 +114,13 @@ class WebViewInterface(val context: Context, private val webView: WebView) {
             }
         }
 
-        val stdout = object : CallbackList<String>() {
+        val stdout = object : CallbackList<String>(UiThreadHandler::runAndWait) {
             override fun onAddElement(s: String) {
                 emitData("stdout", s)
             }
         }
 
-        val stderr = object : CallbackList<String>() {
+        val stderr = object : CallbackList<String>(UiThreadHandler::runAndWait) {
             override fun onAddElement(s: String) {
                 emitData("stderr", s)
             }
@@ -148,6 +151,8 @@ class WebViewInterface(val context: Context, private val webView: WebView) {
                     webView.loadUrl(emitErrCode)
                 }
             }
+        }.whenComplete { _, _ ->
+            runCatching { shell.close() }
         }
     }
 
@@ -167,26 +172,38 @@ class WebViewInterface(val context: Context, private val webView: WebView) {
                 } else {
                     showSystemUI(context.window)
                 }
-                isHideSystemUI = enable
             }
         }
     }
 
-}
+    @JavascriptInterface
+    fun moduleInfo(): String {
+        val moduleInfos = JSONArray(listModules())
+        var currentModuleInfo = JSONObject()
+        currentModuleInfo.put("moduleDir", modDir)
+        val moduleId = File(modDir).getName()
+        for (i in 0 until moduleInfos.length()) {
+            val currentInfo = moduleInfos.getJSONObject(i)
 
-fun hideSystemUI(window: Window) {
-    WindowCompat.setDecorFitsSystemWindows(window, false)
-    WindowInsetsControllerCompat(window, window.decorView).let { controller ->
-        controller.hide(WindowInsetsCompat.Type.systemBars())
-        controller.systemBarsBehavior =
-            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            if (currentInfo.getString("id") != moduleId) {
+                continue
+            }
+
+            var keys = currentInfo.keys()
+            for (key in keys) {
+                currentModuleInfo.put(key, currentInfo.get(key))
+            }
+            break
+        }
+        return currentModuleInfo.toString()
     }
 }
 
-fun showSystemUI(window: Window) {
-    WindowCompat.setDecorFitsSystemWindows(window, true)
-    WindowInsetsControllerCompat(
-        window,
-        window.decorView
-    ).show(WindowInsetsCompat.Type.systemBars())
-}
+fun hideSystemUI(window: Window) =
+    WindowInsetsControllerCompat(window, window.decorView).let { controller ->
+        controller.hide(WindowInsetsCompat.Type.systemBars())
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    }
+
+fun showSystemUI(window: Window) =
+    WindowInsetsControllerCompat(window, window.decorView).show(WindowInsetsCompat.Type.systemBars())

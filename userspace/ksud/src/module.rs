@@ -279,10 +279,22 @@ pub fn prune_modules() -> Result<()> {
         Ok(())
     })?;
 
+    // collect remaining modules, if none, remove img
+    let remaining_modules: Vec<_> = std::fs::read_dir(defs::MODULE_DIR)?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().join("module.prop").exists())
+        .collect();
+
+    if remaining_modules.is_empty() {
+        info!("no remaining modules, deleting image files.");
+        std::fs::remove_file(defs::MODULE_IMG).ok();
+        std::fs::remove_file(defs::MODULE_UPDATE_IMG).ok();
+    }
+
     Ok(())
 }
 
-fn create_module_image(image: &str, image_size: u64, journal_size: u64) -> Result<()> {
+fn create_module_image(image: &str, image_size: u64) -> Result<()> {
     File::create(image)
         .context("Failed to create ext4 image file")?
         .set_len(image_size)
@@ -290,8 +302,8 @@ fn create_module_image(image: &str, image_size: u64, journal_size: u64) -> Resul
 
     // format the img to ext4 filesystem
     let result = Command::new("mkfs.ext4")
-        .arg("-J")
-        .arg(format!("size={journal_size}"))
+        .arg("-O")
+        .arg("^has_journal")
         .arg(image)
         .stdout(Stdio::piped())
         .output()?;
@@ -303,6 +315,7 @@ fn create_module_image(image: &str, image_size: u64, journal_size: u64) -> Resul
     check_image(image)?;
     Ok(())
 }
+
 fn _install_module(zip: &str) -> Result<()> {
     ensure_boot_completed()?;
 
@@ -362,13 +375,13 @@ fn _install_module(zip: &str) -> Result<()> {
         humansize::format_size(zip_uncompressed_size, humansize::DECIMAL)
     );
 
-    let sparse_image_size = 1 << 40; // 1T
-    let journal_size = 8; // 8M
+    let data_vfs = fs4::statvfs("/data").with_context(|| "Failed to stat /data".to_string())?;
+    let sparse_image_size = data_vfs.total_space();
     if !modules_img_exist && !modules_update_img_exist {
         // if no modules and modules_update, it is brand new installation, we should create a new img
         // create a tmp module img and mount it to modules_update
         info!("Creating brand new module image");
-        create_module_image(tmp_module_img, sparse_image_size, journal_size)?;
+        create_module_image(tmp_module_img, sparse_image_size)?;
     } else if modules_update_img_exist {
         // modules_update.img exists, we should use it as tmp img
         info!("Using existing modules_update.img as tmp image");
@@ -390,7 +403,7 @@ fn _install_module(zip: &str) -> Result<()> {
         // legacy image, it's block size is 1024 with unlimited journal size
         if blksize == 1024 {
             println!("- Legacy image, migrating to new format, please be patient...");
-            create_module_image(tmp_module_img, sparse_image_size, journal_size)?;
+            create_module_image(tmp_module_img, sparse_image_size)?;
             let _dontdrop =
                 mount::AutoMountExt4::try_new(tmp_module_img, module_update_tmp_dir, true)
                     .with_context(|| format!("Failed to mount {tmp_module_img}"))?;
@@ -570,6 +583,11 @@ pub fn uninstall_module(id: &str) -> Result<()> {
     })
 }
 
+pub fn run_action(id: &str) -> Result<()> {
+    let action_script_path = format!("/data/adb/modules/{}/action.sh", id);
+    exec_script(&action_script_path, true)
+}
+
 fn _enable_module(module_dir: &str, mid: &str, enable: bool) -> Result<()> {
     let src_module_path = format!("{module_dir}/{mid}");
     let src_module = Path::new(&src_module_path);
@@ -604,13 +622,21 @@ pub fn disable_module(id: &str) -> Result<()> {
 }
 
 pub fn disable_all_modules() -> Result<()> {
+    mark_all_modules(defs::DISABLE_FILE_NAME)
+}
+
+pub fn uninstall_all_modules() -> Result<()> {
+    mark_all_modules(defs::REMOVE_FILE_NAME)
+}
+
+fn mark_all_modules(flag_file: &str) -> Result<()> {
     // we assume the module dir is already mounted
     let dir = std::fs::read_dir(defs::MODULE_DIR)?;
     for entry in dir.flatten() {
         let path = entry.path();
-        let disable_flag = path.join(defs::DISABLE_FILE_NAME);
-        if let Err(e) = ensure_file_exists(disable_flag) {
-            warn!("Failed to disable module: {}: {}", path.display(), e);
+        let flag = path.join(flag_file);
+        if let Err(e) = ensure_file_exists(flag) {
+            warn!("Failed to mark module: {}: {}", path.display(), e);
         }
     }
 
@@ -660,11 +686,13 @@ fn _list_modules(path: &str) -> Vec<HashMap<String, String>> {
         let update = path.join(defs::UPDATE_FILE_NAME).exists();
         let remove = path.join(defs::REMOVE_FILE_NAME).exists();
         let web = path.join(defs::MODULE_WEB_DIR).exists();
+        let action = path.join(defs::MODULE_ACTION_SH).exists();
 
         module_prop_map.insert("enabled".to_owned(), enabled.to_string());
         module_prop_map.insert("update".to_owned(), update.to_string());
         module_prop_map.insert("remove".to_owned(), remove.to_string());
         module_prop_map.insert("web".to_owned(), web.to_string());
+        module_prop_map.insert("action".to_owned(), action.to_string());
 
         if result.is_err() {
             warn!("Failed to parse module.prop: {}", module_prop.display());

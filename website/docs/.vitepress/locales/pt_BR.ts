@@ -22,8 +22,8 @@ export default defineConfig({
     ],
 
     footer: {
-        message: 'Lançado sob a Licença GPL3.',
-        copyright: 'Copyright © Desenvolvedores do KernelSU atuais de 2022'
+        message: 'Lançado sob a Licença GPL3',
+        copyright: 'Copyright © 2022-presente Desenvolvedores do KernelSU.'
     },
 
     editLink: {
@@ -45,10 +45,10 @@ function sidebarGuide() {
         text: 'Guia',
         items: [
           { text: 'O que é KernelSU?', link: '/pt_BR/guide/what-is-kernelsu' },
-          { text: 'Diferença com Magisk', link: '/pt_BR/guide/difference-with-magisk' },
+          { text: 'Diferenças com Magisk', link: '/pt_BR/guide/difference-with-magisk' },
           { text: 'Instalação', link: '/pt_BR/guide/installation' },
-          { text: 'Como construir?', link: '/pt_BR/guide/how-to-build' },
-          { text: 'Integração para dispositivos não GKI', link: '/pt_BR/guide/how-to-integrate-for-non-gki'},
+          { text: 'Como compilar', link: '/pt_BR/guide/how-to-build' },
+          { text: 'Integração para dispositivos não-GKI', link: '/pt_BR/guide/how-to-integrate-for-non-gki'},
           { text: 'Dispositivos com suporte não oficial', link: '/pt_BR/guide/unofficially-support-devices.md' },
           { text: 'Guias de módulo', link: '/pt_BR/guide/module.md' },
           { text: 'Módulo WebUI', link: '/pt_BR/guide/module-webui.md' },

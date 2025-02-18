@@ -35,7 +35,17 @@ enum Commands {
     BootCompleted,
 
     /// Install KernelSU userspace component to system
-    Install,
+    Install {
+        #[arg(long, default_value = None)]
+        magiskboot: Option<PathBuf>,
+    },
+
+    /// Uninstall KernelSU modules and itself(LKM Only)
+    Uninstall {
+        /// magiskboot path, if not specified, will search from $PATH
+        #[arg(long, default_value = None)]
+        magiskboot: Option<PathBuf>,
+    },
 
     /// SELinux policy Patch tool
     Sepolicy {
@@ -79,7 +89,7 @@ enum Commands {
         #[arg(short, long, default_value = None)]
         out: Option<PathBuf>,
 
-        /// magiskboot path, if not specified, will use builtin one
+        /// magiskboot path, if not specified, will search from $PATH
         #[arg(long, default_value = None)]
         magiskboot: Option<PathBuf>,
 
@@ -87,12 +97,43 @@ enum Commands {
         #[arg(long, default_value = None)]
         kmi: Option<String>,
     },
+
+    /// Restore boot or init_boot images patched by KernelSU
+    BootRestore {
+        /// boot image path, if not specified, will try to find the boot image automatically
+        #[arg(short, long)]
+        boot: Option<PathBuf>,
+
+        /// Flash it to boot partition after patch
+        #[arg(short, long, default_value = "false")]
+        flash: bool,
+
+        /// magiskboot path, if not specified, will search from $PATH
+        #[arg(long, default_value = None)]
+        magiskboot: Option<PathBuf>,
+    },
+
+    /// Show boot information
+    BootInfo {
+        #[command(subcommand)]
+        command: BootInfo,
+    },
     /// For developers
     Debug {
         #[command(subcommand)]
         command: Debug,
     },
 }
+
+#[derive(clap::Subcommand, Debug)]
+enum BootInfo {
+    /// show current kmi version
+    CurrentKmi,
+
+    /// show supported kmi versions
+    SupportedKmi,
+}
+
 #[derive(clap::Subcommand, Debug)]
 enum Debug {
     /// Set the manager app, kernel CONFIG_KSU_DEBUG should be enabled.
@@ -182,6 +223,12 @@ enum Module {
         id: String,
     },
 
+    /// run action for module <id>
+    Action {
+        // module id
+        id: String,
+    },
+
     /// list all modules
     List,
 
@@ -258,18 +305,19 @@ pub fn run() -> Result<()> {
             #[cfg(any(target_os = "linux", target_os = "android"))]
             {
                 utils::switch_mnt_ns(1)?;
-                utils::unshare_mnt_ns()?;
             }
             match command {
                 Module::Install { zip } => module::install_module(&zip),
                 Module::Uninstall { id } => module::uninstall_module(&id),
                 Module::Enable { id } => module::enable_module(&id),
                 Module::Disable { id } => module::disable_module(&id),
+                Module::Action { id } => module::run_action(&id),
                 Module::List => module::list_modules(),
                 Module::Shrink => module::shrink_ksu_images(),
             }
         }
-        Commands::Install => utils::install(),
+        Commands::Install { magiskboot } => utils::install(magiskboot),
+        Commands::Uninstall { magiskboot } => utils::uninstall(magiskboot),
         Commands::Sepolicy { command } => match command {
             Sepolicy::Patch { sepolicy } => crate::sepolicy::live_patch(&sepolicy),
             Sepolicy::Apply { file } => crate::sepolicy::apply_file(file),
@@ -322,6 +370,25 @@ pub fn run() -> Result<()> {
             magiskboot,
             kmi,
         } => crate::boot_patch::patch(boot, kernel, module, init, ota, flash, out, magiskboot, kmi),
+
+        Commands::BootInfo { command } => match command {
+            BootInfo::CurrentKmi => {
+                let kmi = crate::boot_patch::get_current_kmi()?;
+                println!("{}", kmi);
+                // return here to avoid printing the error message
+                return Ok(());
+            }
+            BootInfo::SupportedKmi => {
+                let kmi = crate::assets::list_supported_kmi()?;
+                kmi.iter().for_each(|kmi| println!("{}", kmi));
+                return Ok(());
+            }
+        },
+        Commands::BootRestore {
+            boot,
+            magiskboot,
+            flash,
+        } => crate::boot_patch::restore(boot, magiskboot, flash),
     };
 
     if let Err(e) = &result {

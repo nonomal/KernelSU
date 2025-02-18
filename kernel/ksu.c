@@ -1,15 +1,15 @@
-#include "linux/export.h"
-#include "linux/fs.h"
-#include "linux/kobject.h"
-#include "linux/module.h"
-#include "linux/workqueue.h"
+#include <linux/export.h>
+#include <linux/fs.h>
+#include <linux/kobject.h>
+#include <linux/module.h>
+#include <linux/workqueue.h>
 
 #include "allowlist.h"
 #include "arch.h"
 #include "core_hook.h"
 #include "klog.h" // IWYU pragma: keep
 #include "ksu.h"
-#include "uid_observer.h"
+#include "throne_tracker.h"
 
 static struct workqueue_struct *ksu_workqueue;
 
@@ -32,8 +32,10 @@ int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,
 					    flags);
 }
 
-extern void ksu_enable_sucompat();
-extern void ksu_enable_ksud();
+extern void ksu_sucompat_init();
+extern void ksu_sucompat_exit();
+extern void ksu_ksud_init();
+extern void ksu_ksud_exit();
 
 int __init kernelsu_init(void)
 {
@@ -53,14 +55,10 @@ int __init kernelsu_init(void)
 
 	ksu_allowlist_init();
 
-	ksu_uid_observer_init();
+	ksu_throne_tracker_init();
 
-#ifdef CONFIG_KPROBES
-	ksu_enable_sucompat();
-	ksu_enable_ksud();
-#else
-	pr_alert("KPROBES is disabled, KernelSU may not work, please check https://kernelsu.org/guide/how-to-integrate-for-non-gki.html");
-#endif
+	ksu_sucompat_init();
+	ksu_ksud_init();
 
 #ifdef MODULE
 #ifndef CONFIG_KSU_DEBUG
@@ -74,9 +72,12 @@ void kernelsu_exit(void)
 {
 	ksu_allowlist_exit();
 
-	ksu_uid_observer_exit();
+	ksu_throne_tracker_exit();
 
 	destroy_workqueue(ksu_workqueue);
+
+	ksu_ksud_exit();
+	ksu_sucompat_exit();
 
 	ksu_core_exit();
 }
@@ -87,7 +88,4 @@ module_exit(kernelsu_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("weishu");
 MODULE_DESCRIPTION("Android KernelSU");
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 0, 0)
 MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
-#endif
